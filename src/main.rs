@@ -19,7 +19,7 @@ use rand::Rng;
 use rand::{rngs::StdRng, SeedableRng};
 use std::env;
 
-const P: u64 = 18446744069414584321; // 2^64 - 2^32 + 1
+const P: u64 = 2130706433; // KoalaBear: 2^31 - 2^24 + 1
 
 #[inline]
 fn mod_add(a: u64, b: u64) -> u64 {
@@ -34,7 +34,9 @@ fn mod_sub(a: u64, b: u64) -> u64 {
 
 #[inline]
 fn mod_mul(a: u64, b: u64) -> u64 {
-    ((a as u128 * b as u128) % (P as u128)) as u64
+    // NOTE: Only correct for primes P <= 2^32 - 1 (32-bit or smaller),
+    // so that a*b fits in u64 without overflow. For larger primes use u128.
+    (a * b) % P
 }
 
 fn mod_pow(mut a: u64, mut e: u64) -> u64 {
@@ -139,15 +141,44 @@ where
 
 /// Full MDS test: checks all square minors of all sizes 1..N.
 fn is_mds(matrix: &[Vec<u64>]) -> bool {
+    use std::io::Write;
+
+    fn binom(n: usize, k: usize) -> u64 {
+        if k > n { return 0; }
+        let k = k.min(n - k);
+        let mut r: u64 = 1;
+        for i in 0..k {
+            r = r * (n - i) as u64 / (i + 1) as u64;
+        }
+        r
+    }
+
     let n = matrix.len();
+    // Total minors = sum_{k=1}^{n} C(n,k)^2  (= C(2n,n) - 1 by Vandermonde)
+    let total: u64 = (1..=n).map(|k| binom(n, k) * binom(n, k)).sum();
+
+    let mut count: u64 = 0;
+    let mut last_pct: u64 = u64::MAX;
+
     for k in 1..=n {
         let ok_rows = for_each_combination(n, k, |rows| {
-            for_each_combination(n, k, |cols| nonsingular_minor(matrix, rows, cols))
+            for_each_combination(n, k, |cols| {
+                count += 1;
+                let pct = count * 100 / total;
+                if pct != last_pct {
+                    last_pct = pct;
+                    eprint!("\r{:3}%  ({}/{} minors tested)", pct, count, total);
+                    let _ = std::io::stderr().flush();
+                }
+                nonsingular_minor(matrix, rows, cols)
+            })
         });
         if !ok_rows {
+            eprintln!();
             return false;
         }
     }
+    eprintln!("\r100%  ({}/{} minors tested)", total, total);
     true
 }
 
